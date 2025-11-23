@@ -4,186 +4,109 @@ import torch.nn.functional as F
 from layers.Autoformer_EncDec import series_decomp
 from layers.Embed import DataEmbedding_wo_pos
 from layers.StandardNorm import Normalize
+from layers.Conv_Blocks import Inception_Block_V1
+
+def FFT_for_Period(x, k=2):
+    # [B, T, C]
+    xf = torch.fft.rfft(x, dim=1)
+    # find period by amplitudes
+    frequency_list = abs(xf).mean(0).mean(-1)
+    frequency_list[0] = 0
+    _, top_list = torch.topk(frequency_list, k)
+    top_list = top_list.detach()
+    period = x.shape[1] // top_list
+    return period, abs(xf).mean(-1)[:, top_list]
 
 
-class DFT_series_decomp(nn.Module):
-    """
-    Series decomposition block
-    """
-
-    def     __init__(self, top_k=5):
-    def __init__(self, top_k: int = 5):
-        super(DFT_series_decomp, self).__init__()
-        self.top_k = top_k
-
-    def forward(self, x):
-        xf = torch.fft.rfft(x)
-        freq = abs(xf)
-        freq[0] = 0
-        top_k_freq, top_list = torch.topk(freq, k=self.top_k)
-        xf[freq <= top_k_freq.min()] = 0
-        x_season = torch.fft.irfft(xf)
-        x_trend = x - x_season
-        return x_season, x_trend
-
-
-class MultiScaleSeasonMixing(nn.Module):
-    """
-    Bottom-up mixing season pattern
-    """
-
+class TimesNetBlock(nn.Module):
     def __init__(self, configs):
-        super(MultiScaleSeasonMixing, self).__init__()
-
-        self.down_sampling_layers = torch.nn.ModuleList(
-            [
-                nn.Sequential(
-                    torch.nn.Linear(
-                        configs.seq_len // (configs.down_sampling_window ** i),
-                        configs.seq_len // (configs.down_sampling_window ** (i + 1)),
-                    ),
-                    nn.GELU(),
-                    torch.nn.Linear(
-                        configs.seq_len // (configs.down_sampling_window ** (i + 1)),
-                        configs.seq_len // (configs.down_sampling_window ** (i + 1)),
-                    ),
-
-                )
-                for i in range(configs.down_sampling_layers)
-            ]
-        )
-
-    def forward(self, season_list):
-
-        # mixing high->low
-        out_high = season_list[0]
-        out_low = season_list[1]
-        out_season_list = [out_high.permute(0, 2, 1)]
-
-        for i in range(len(season_list) - 1):
-            out_low_res = self.down_sampling_layers[i](out_high)
-            out_low = out_low + out_low_res
-            out_high = out_low
-            if i + 2 <= len(season_list) - 1:
-                out_low = season_list[i + 2]
-            out_season_list.append(out_high.permute(0, 2, 1))
-
-        return out_season_list
-
-
-class MultiScaleTrendMixing(nn.Module):
-    """
-    Top-down mixing trend pattern
-    """
-
-    def __init__(self, configs):
-        super(MultiScaleTrendMixing, self).__init__()
-
-        self.up_sampling_layers = torch.nn.ModuleList(
-            [
-                nn.Sequential(
-                    torch.nn.Linear(
-                        configs.seq_len // (configs.down_sampling_window ** (i + 1)),
-                        configs.seq_len // (configs.down_sampling_window ** i),
-                    ),
-                    nn.GELU(),
-                    torch.nn.Linear(
-                        configs.seq_len // (configs.down_sampling_window ** i),
-                        configs.seq_len // (configs.down_sampling_window ** i),
-                    ),
-                )
-                for i in reversed(range(configs.down_sampling_layers))
-            ])
-
-    def forward(self, trend_list):
-
-        # mixing low->high
-        trend_list_reverse = trend_list.copy()
-        trend_list_reverse.reverse()
-        out_low = trend_list_reverse[0]
-        out_high = trend_list_reverse[1]
-        out_trend_list = [out_low.permute(0, 2, 1)]
-
-        for i in range(len(trend_list_reverse) - 1):
-            out_high_res = self.up_sampling_layers[i](out_low)
-            out_high = out_high + out_high_res
-            out_low = out_high
-            if i + 2 <= len(trend_list_reverse) - 1:
-                out_high = trend_list_reverse[i + 2]
-            out_trend_list.append(out_low.permute(0, 2, 1))
-
-        out_trend_list.reverse()
-        return out_trend_list
-
-
-class PastDecomposableMixing(nn.Module):
-    def __init__(self, configs):
-        super(PastDecomposableMixing, self).__init__()
+        super(TimesNetBlock, self).__init__()
+        self.configs = configs
+        self.k = configs.top_k
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
-        self.down_sampling_window = configs.down_sampling_window
-
-        self.layer_norm = nn.LayerNorm(configs.d_model)
-        self.dropout = nn.Dropout(configs.dropout)
         self.channel_independence = configs.channel_independence
 
-        if configs.decomp_method == 'moving_avg':
-            self.decompsition = series_decomp(configs.moving_avg)
-        elif configs.decomp_method == "dft_decomp":
-            self.decompsition = DFT_series_decomp(configs.top_k)
-        else:
-            raise ValueError('decompsition is error')
-
-        if not configs.channel_independence:
-            self.cross_layer = nn.Sequential(
-                nn.Linear(in_features=configs.d_model, out_features=configs.d_ff),
+        # 1. 多周期处理模块 (每个周期独立卷积块)
+        self.period_blocks = nn.ModuleList([
+            nn.Sequential(
+                Inception_Block_V1(configs.d_model, configs.d_ff,
+                                   num_kernels=configs.num_kernels),
                 nn.GELU(),
-                nn.Linear(in_features=configs.d_ff, out_features=configs.d_model),
-            )
+                Inception_Block_V1(configs.d_ff, configs.d_model,
+                                   num_kernels=configs.num_kernels)
+            ) for _ in range(configs.top_k)
+        ])
 
-        # Mixing season
-        self.mixing_multi_scale_season = MultiScaleSeasonMixing(configs)
+        # 2. 跨尺度/跨通道交互
+        if not configs.channel_independence:
+            self.cross_fusion = nn.Sequential(
+                nn.Linear(configs.d_model, configs.d_ff),
+                nn.GELU(),
+                nn.Linear(configs.d_ff, configs.d_model))
 
-        # Mxing trend
-        self.mixing_multi_scale_trend = MultiScaleTrendMixing(configs)
+        # 3. 输出标准化
+        self.norm = nn.LayerNorm(configs.d_model)
 
-        self.out_cross_layer = nn.Sequential(
-            nn.Linear(in_features=configs.d_model, out_features=configs.d_ff),
-            nn.GELU(),
-            nn.Linear(in_features=configs.d_ff, out_features=configs.d_model),
-        )
+    def _process_single_scale(self, x , period_list, period_weight):
+        B, T, N = x.shape
+        period_outputs = []
+        for i in range(self.k):
+            period = int(period_list[i])  # 确保period为整数
+            if period < 1:
+                continue
+
+            # --- 精确计算填充长度 ---
+            if T % period != 0:
+                padded_length = ((T + period - 1) // period) * period
+                pad_len = padded_length - T
+                padding = x[:, -pad_len:, :]  # 反射填充
+                x_pad = torch.cat([x, padding], dim=1)
+            else:
+                x_pad = x
+                padded_length = T
+
+            # --- 时空转换 ---
+            x_reshape = x_pad.reshape(B, -1, period, N).permute(0, 3, 1, 2)  # [B, N, num_periods, period]
+
+            # --- 2D卷积处理 ---
+            x_processed = self.period_blocks[i](x_reshape)
+            x_processed = x_processed.permute(0, 2, 3, 1).reshape(B, -1, N)  # [B, padded_length, N]
+
+            # --- 精确截取原始长度部分 ---
+            x_processed = x_processed[:, :T, :]  # 确保输出长度=T
+
+            # --- 加权聚合（修正广播维度）---
+            weight = period_weight[:, i].view(B, 1, 1)  # [B, 1, 1] 确保正确广播
+            period_outputs.append(x_processed * weight)
+
+        # 聚合所有周期特征
+        if period_outputs:
+            out = torch.stack(period_outputs, dim=-1).sum(-1)
+        else:
+            out = x  # 无有效周期时保留原始输入
+
+        return out
 
     def forward(self, x_list):
-        length_list = []
-        for x in x_list:
-            _, T, _ = x.size()
-            length_list.append(T)
 
-        # Decompose to obtain the season and trend
-        season_list = []
-        trend_list = []
+        period_list, period_weight = FFT_for_Period(x_list[0], self.k)
+        period_weight = F.softmax(period_weight, dim=1)  # [B, k]
+        """ 处理多尺度输入列表 """
+        processed_list = []
         for x in x_list:
-            season, trend = self.decompsition(x)
+            # 单尺度周期处理
+            period_feat = self._process_single_scale(x,period_list,period_weight)
+
+            # 跨通道交互 (可选)
             if not self.channel_independence:
-                season = self.cross_layer(season)
-                trend = self.cross_layer(trend)
-            season_list.append(season.permute(0, 2, 1))
-            trend_list.append(trend.permute(0, 2, 1))
+                period_feat = self.cross_fusion(period_feat)
 
-        # bottom-up season mixing
-        out_season_list = self.mixing_multi_scale_season(season_list)
-        # top-down trend mixing
-        out_trend_list = self.mixing_multi_scale_trend(trend_list)
-
-        out_list = []
-        for ori, out_season, out_trend, length in zip(x_list, out_season_list, out_trend_list,
-                                                      length_list):
-            out = out_season + out_trend
-            if self.channel_independence:
-                out = ori + self.out_cross_layer(out)
-            out_list.append(out[:, :length, :])
-        return out_list
-
+            # 残差连接 + 标准化
+            out = self.norm(period_feat + x)
+            processed_list.append(out)
+            period_list = period_list//2
+        return processed_list
 
 class Model(nn.Module):
 
@@ -194,13 +117,13 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
         self.label_len = configs.label_len
         self.pred_len = configs.pred_len
+        self.k = configs.top_k
         self.down_sampling_window = configs.down_sampling_window
         self.channel_independence = configs.channel_independence
-        self.pdm_blocks = nn.ModuleList([PastDecomposableMixing(configs)
-                                         for _ in range(configs.e_layers)])
-
         self.preprocess = series_decomp(configs.moving_avg)
         self.enc_in = configs.enc_in
+        self.TimesNet = nn.ModuleList([TimesNetBlock(configs)
+                                    for _ in range(configs.e_layers)])
 
         if self.channel_independence:
             self.enc_embedding = DataEmbedding_wo_pos(1, configs.d_model, configs.embed, configs.freq,
@@ -367,7 +290,7 @@ class Model(nn.Module):
 
         # Past Decomposable Mixing as encoder for past
         for i in range(self.layer):
-            enc_out_list = self.pdm_blocks[i](enc_out_list)
+            enc_out_list = self.TimesNet[i](enc_out_list)
 
         # Future Multipredictor Mixing as decoder for future
         dec_out_list = self.future_multi_mixing(B, enc_out_list, x_list)

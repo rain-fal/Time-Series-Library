@@ -4,6 +4,7 @@ import pandas as pd
 import glob
 import re
 import torch
+from sympy.codegen.ast import continue_
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from utils.timefeatures import time_features
@@ -266,9 +267,12 @@ class Dataset_Custom(Dataset):
         df_raw.columns: ['date', ...(other features), target feature]
         '''
         cols = list(df_raw.columns)
-        cols.remove(self.target)
         cols.remove('date')
-        df_raw = df_raw[['date'] + cols + [self.target]]
+        if self.features == 'M' or self.features == 'MSS':
+            df_raw = df_raw[['date'] +cols]
+        else:
+            cols.remove(self.target)
+            df_raw = df_raw[['date'] + cols + [self.target]]
         num_train = int(len(df_raw) * 0.7)
         num_test = int(len(df_raw) * 0.2)
         num_vali = len(df_raw) - num_train - num_test
@@ -277,7 +281,7 @@ class Dataset_Custom(Dataset):
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
-        if self.features == 'M' or self.features == 'MS':
+        if self.features == 'M' or self.features == 'MS'or self.features == 'MSS':
             cols_data = df_raw.columns[1:]
             df_data = df_raw[cols_data]
         elif self.features == 'S':

@@ -32,11 +32,14 @@ if __name__ == '__main__':
     parser.add_argument('--root_path', type=str, default='./data/ETT/', help='root path of the data file')
     parser.add_argument('--data_path', type=str, default='ETTh1.csv', help='data file')
     parser.add_argument('--features', type=str, default='M',
-                        help='forecasting task, options:[M, S, MS]; M:multivariate predict multivariate, S:univariate predict univariate, MS:multivariate predict univariate')
+                        help='forecasting task, options:[M, S, MS, MSS]; M:multivariate predict multivariate, S:univariate predict univariate, MS:multivariate predict univariate, MSS:multivariate predict specific subset')
     parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
     parser.add_argument('--freq', type=str, default='h',
                         help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+    # Custom Arguments for MSS mode
+    parser.add_argument('--num_stations', type=int, default=5, help='number of stations for MSS mode')
+    parser.add_argument('--num_vars', type=int, default=6, help='number of variables per station for MSS mode')
 
     # forecasting task
     parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
@@ -139,6 +142,21 @@ if __name__ == '__main__':
 
     # TimeXer
     parser.add_argument('--patch_len', type=int, default=16, help='patch length')
+
+    # SparseTSF
+    parser.add_argument('--period_len', type=int, default=24, help='period length')
+    parser.add_argument('--model_type', default='linear', help='model type: linear/mlp')
+
+    #SSCNN
+    parser.add_argument('--short_period_len', type=int, default=8, help='Short period length')
+    parser.add_argument('--cycle_len', type=int, default=8, help='Cycle length')
+    parser.add_argument('--kernel_size', type=int, default=2, help='Kernel size')
+    parser.add_argument('--spatial', type=int, default=1, help='enable spatial component')
+    parser.add_argument('--lookback_len', type=int, default=1, help='Lookback sequence length')
+    parser.add_argument('--ext', type=int, default=1, help='enable extrapolation')
+    parser.add_argument('--long_term', type=int, default=1, help='enable long-term component')
+    parser.add_argument('--seasonal', type=int, default=1, help='enable seasonal component')
+    parser.add_argument('--short_term', type=int, default=1, help='enable short-term component')
 
     # GCN
     parser.add_argument('--node_dim', type=int, default=10, help='each node embbed to dim dimentions')
