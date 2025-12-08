@@ -3,7 +3,12 @@ import torch
 from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
     Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer, \
+<<<<<<< HEAD
     WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter ,SSCNN ,CrossLinear
+=======
+    WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, Chronos, Moirai, TiRex,\
+    TimesFM, Toto, Chronos2,SparseTSF, SSCNN,TimesNetMixer
+>>>>>>> 62f0c575d77d0bb85aa3a911438e18faf0a35d44
 
 
 class Exp_Basic(object):
@@ -42,8 +47,22 @@ class Exp_Basic(object):
             'KANAD': KANAD,
             'MSGNet': MSGNet,
             'TimeFilter': TimeFilter,
+<<<<<<< HEAD
             'SSCNN': SSCNN,
             'CrossLinear': CrossLinear,
+=======
+            'Sundial': Sundial,
+            'TimeMoE': TimeMoE,
+            'Chronos': Chronos,
+            'Moirai': Moirai,
+            'TiRex': TiRex,
+            'TimesFM': TimesFM,
+            'Toto': Toto,
+            'Chronos2': Chronos2,
+            'SparseTSF':SparseTSF,
+            'SSCNN': SSCNN,
+            'TimesNetMixer': TimesNetMixer,
+>>>>>>> 62f0c575d77d0bb85aa3a911438e18faf0a35d44
         }
         if args.model == 'Mamba':
             print('Please make sure you have successfully installed mamba_ssm')
