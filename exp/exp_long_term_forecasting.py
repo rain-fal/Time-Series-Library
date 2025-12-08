@@ -9,8 +9,9 @@ import os
 import time
 import warnings
 import numpy as np
-from utils.dtw_metric import dtw, accelerated_dtw
-from utils.augmentation import run_augmentation, run_augmentation_single
+import matplotlib.pyplot as plt
+from utils.dtw_metric import dtw,accelerated_dtw
+from utils.augmentation import run_augmentation,run_augmentation_single
 
 warnings.filterwarnings('ignore')
 
@@ -18,7 +19,12 @@ warnings.filterwarnings('ignore')
 class Exp_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Long_Term_Forecast, self).__init__(args)
-
+        self.ot_indices = []
+        if self.args.features == 'MSS':
+            # 这里依赖 args.num_stations 和 args.num_vars
+            for s in range(self.args.num_stations):
+                ot_index = (s + 1) * self.args.num_vars - 1
+                self.ot_indices.append(ot_index)
     def _build_model(self):
         model = self.model_dict[self.args.model].Model(self.args).float()
 
@@ -63,9 +69,22 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
 
-                pred = outputs.detach()
-                true = batch_y.detach()
+                pred = outputs.detach().cpu()
+                true = batch_y.detach().cpu()
 
+                # MSS Mode: Select specific OT variables for loss calculation
+                if self.args.features == 'MSS':
+                    # Calculate indices for OT variables (assumed to be the last variable of each station)
+                    ot_indices = []
+                    for s in range(self.args.num_stations):
+                        ot_index = (s + 1) * self.args.num_vars - 1
+                        if ot_index < pred.shape[-1]:
+                            ot_indices.append(ot_index)
+                    
+                    if ot_indices:
+                        pred = pred[:, :, ot_indices]
+                        true = true[:, :, ot_indices]
+                        
                 loss = criterion(pred, true)
 
                 total_loss.append(loss.item())
@@ -119,7 +138,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         f_dim = -1 if self.args.features == 'MS' else 0
                         outputs = outputs[:, -self.args.pred_len:, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
+                        # MSS Mode: Select specific OT variables for loss calculation
+                        if self.args.features == 'MSS':
+                            ot_indices = []
+                            for s in range(self.args.num_stations):
+                                ot_index = (s + 1) * self.args.num_vars - 1
+                                if ot_index < outputs.shape[-1]:
+                                    ot_indices.append(ot_index)
+                            
+                            if ot_indices:
+                                loss = criterion(outputs[:, :, ot_indices], batch_y[:, :, ot_indices])
+                            else:
+                                loss = criterion(outputs, batch_y)
+                        else:
+                            loss = criterion(outputs, batch_y)
                         train_loss.append(loss.item())
                 else:
                     outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
@@ -127,7 +159,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
+                    # MSS Mode: Select specific OT variables for loss calculation
+                    if self.args.features == 'MSS':
+                        ot_indices = []
+                        for s in range(self.args.num_stations):
+                            ot_index = (s + 1) * self.args.num_vars - 1
+                            if ot_index < outputs.shape[-1]:
+                                ot_indices.append(ot_index)
+                        
+                        if ot_indices:
+                            loss = criterion(outputs[:, :, ot_indices], batch_y[:, :, ot_indices])
+                        else:
+                            loss = criterion(outputs, batch_y)
+                    else:
+                        loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
@@ -206,31 +251,70 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     if outputs.shape[-1] != batch_y.shape[-1]:
                         outputs = np.tile(outputs, [1, 1, int(batch_y.shape[-1] / outputs.shape[-1])])
                     outputs = test_data.inverse_transform(outputs.reshape(shape[0] * shape[1], -1)).reshape(shape)
-                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0] * shape[1], -1)).reshape(shape)
-
+                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0] * shape[1], -1)).reshape(shape)  
+        
                 outputs = outputs[:, :, f_dim:]
                 batch_y = batch_y[:, :, f_dim:]
 
+                # MSS Mode 处理
+                mss_valid_indices = []
+                if self.args.features == 'MSS' and self.ot_indices:
+                    mss_valid_indices = [idx for idx in self.ot_indices if idx < outputs.shape[-1]]
+                    if mss_valid_indices:
+                        outputs = outputs[:, :, mss_valid_indices]
+                        batch_y = batch_y[:, :, mss_valid_indices]
+                        
                 pred = outputs
                 true = batch_y
 
                 preds.append(pred)
                 trues.append(true)
+                # 可视化逻辑更新：在一张图上绘制每个变量
                 if i % 20 == 0:
                     input = batch_x.detach().cpu().numpy()
                     if test_data.scale and self.args.inverse:
                         shape = input.shape
                         input = test_data.inverse_transform(input.reshape(shape[0] * shape[1], -1)).reshape(shape)
-                    gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                    pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                    visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
+                    
+                    # 获取变量数量 (最后一维)
+                    num_vars = true.shape[-1]
+                    
+                    # 创建子图，动态设置高度
+                    plt.figure(figsize=(10, 3 * num_vars))
+                    
+                    for v in range(num_vars):
+                        plt.subplot(num_vars, 1, v + 1)
+                        
+                        # 匹配 Input 的变量索引
+                        # 如果是 MS 模式，Input 是多变量，但 Output/True 只有 1 个变量 (通常对应 Input 的最后一个)
+                        if self.args.features == 'MS':
+                            input_v = input[0, :, -1]
+                        elif self.args.features == 'MSS' and mss_valid_indices:
+                            # MSS 模式下，Output 的第 v 个变量对应 Input 的 ot_indices[v]
+                            input_v = input[0, :, mss_valid_indices[v]]
+                        else:
+                            # M 或 S 模式，一一对应
+                            input_v = input[0, :, v]
+
+                        true_v = true[0, :, v]
+                        pred_v = pred[0, :, v]
+                        
+                        # 拼接历史和预测/真实值
+                        gt = np.concatenate((input_v, true_v), axis=0)
+                        pd = np.concatenate((input_v, pred_v), axis=0)
+                        
+                        plt.plot(gt, label='GroundTruth', linewidth=2)
+                        plt.plot(pd, label='Prediction', linewidth=2)
+                        plt.title(f'Variable {v}')
+                        if v == 0:
+                            plt.legend()
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(folder_path, str(i) + '.pdf'))
+                    plt.close()
 
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
-        print('test shape:', preds.shape, trues.shape)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        print('test shape:', preds.shape, trues.shape)
 
         # result save
         folder_path = './results/' + setting + '/'

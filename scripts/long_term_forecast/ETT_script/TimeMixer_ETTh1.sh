@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+set CUDA_VISIBLE_DEVICES=0
 
 model_name=TimeMixer
 
@@ -15,7 +15,7 @@ batch_size=16
 
 python -u run.py \
   --task_name long_term_forecast \
-  --is_training 1 \
+  --is_training 0 \
   --root_path  ./dataset/ETT-small/\
   --data_path ETTh1.csv \
   --model_id ETTh1_$seq_len'_'96 \
@@ -43,7 +43,7 @@ python -u run.py \
 
 python -u run.py \
   --task_name long_term_forecast \
-  --is_training 1 \
+  --is_training 0 \
   --root_path ./dataset/ETT-small/ \
   --data_path ETTh1.csv \
   --model_id ETTh1_$seq_len'_'192 \
@@ -71,7 +71,7 @@ python -u run.py \
 
 python -u run.py \
   --task_name long_term_forecast \
-  --is_training 1 \
+  --is_training 0 \
   --root_path ./dataset/ETT-small/ \
   --data_path ETTh1.csv \
   --model_id ETTh1_$seq_len'_'336 \
@@ -99,7 +99,7 @@ python -u run.py \
 
 python -u run.py \
   --task_name long_term_forecast \
-  --is_training 1 \
+  --is_training 0 \
   --root_path ./dataset/ETT-small/ \
   --data_path ETTh1.csv \
   --model_id ETTh1_$seq_len'_'720 \

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from layers.Autoformer_EncDec import series_decomp
-
+from layers.StandardNorm import Normalize
 
 class Model(nn.Module):
     """
@@ -24,7 +24,7 @@ class Model(nn.Module):
         self.decompsition = series_decomp(configs.moving_avg)
         self.individual = individual
         self.channels = configs.enc_in
-
+        self.rev = Normalize(configs.enc_in, affine=True, non_norm=True if configs.use_norm == 0 else False)
         if self.individual:
             self.Linear_Seasonal = nn.ModuleList()
             self.Linear_Trend = nn.ModuleList()
@@ -73,8 +73,23 @@ class Model(nn.Module):
         return x.permute(0, 2, 1)
 
     def forecast(self, x_enc):
+        
         # Encoder
-        return self.encoder(x_enc)
+        # 1. 归一化 (Normalize)
+        # 输入: [Batch, Seq_Len, Channels]
+        # 输出: 均值为0，方差为1的数据
+        # x_enc = self.rev(x_enc, 'norm')
+
+        # 2. DLinear 预测 (Encoder)
+        # 模型只需要学习形状，不需要担心绝对数值大小
+        enc_out = self.encoder(x_enc)
+
+        # 3. 反归一化 (De-normalize)
+        # 将预测出的形状还原回真实的功率数值 (MW)
+        # 使用的是第1步算出来的均值和方差
+        
+        # enc_out = self.rev(enc_out, 'denorm')
+        return enc_out
 
     def imputation(self, x_enc):
         # Encoder
